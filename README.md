@@ -134,6 +134,12 @@ HwpWriter().from_ir(ir, "custom.hwp")
 - 맞춤법·행정 문체 교정 (Pro)
 - RAG 문서 검색 (Pro)
 
+## 스펙 기반
+
+[한컴 공식 HWP 5.0 문서 파일 구조](https://www.hancom.com/etc/hwpDownload.do) 및 [OWPML(KS X 6101)](https://tech.hancom.com/hwpxformat/) 표준을 기반으로 구현되었습니다.
+
+> HWP는 한글과컴퓨터의 등록 상표입니다. 본 프로젝트는 한컴과 무관한 독립 프로젝트입니다.
+
 ## 라이선스
 
 MIT License
