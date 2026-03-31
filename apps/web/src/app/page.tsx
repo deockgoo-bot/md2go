@@ -28,7 +28,7 @@ export default function LandingPage() {
               무료로 시작하기 <ArrowRight className="h-4 w-4" />
             </Link>
             <a
-              href="https://github.com"
+              href="https://github.com/deockgoo-bot/md2go"
               className="inline-flex items-center gap-2 bg-gray-900 text-white px-6 py-3 rounded-lg font-medium hover:bg-gray-800 transition-colors"
             >
               <Github className="h-4 w-4" /> GitHub
@@ -195,8 +195,8 @@ HwpWriter().from_markdown("# 업무 보고\\n\\n내용입니다.", "report.hwp")
         <div className="max-w-5xl mx-auto px-6 flex items-center justify-between text-sm text-gray-400">
           <span>HWP Converter AI</span>
           <div className="flex items-center gap-6">
-            <a href="https://github.com" className="hover:text-gray-600">GitHub</a>
-            <span>한컴 공식 스펙 기반</span>
+            <a href="https://github.com/deockgoo-bot/md2go" className="hover:text-gray-600">GitHub</a>
+            <a href="https://www.hancom.com/etc/hwpDownload.do" className="hover:text-gray-600">한컴 공식 스펙 기반</a>
           </div>
         </div>
       </footer>
