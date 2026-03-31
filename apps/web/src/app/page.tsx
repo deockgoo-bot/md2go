@@ -18,7 +18,7 @@ export default function LandingPage() {
           </h1>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto mb-10">
             HWP 문서를 프로그래밍으로 자동 생성·변환·검색·교정.
-            공공기관 문서 업무 시간을 50% 단축합니다.
+            HWP 문서 작업에 들이는 시간을 줄일 수 있습니다.
           </p>
           <div className="flex items-center justify-center gap-4">
             <Link
