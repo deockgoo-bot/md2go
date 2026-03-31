@@ -24,7 +24,7 @@ from .generator import HwpxGenerator
 from .parser import HwpxParser
 from .ir_schema import DocumentIR, BlockNode, InlineNode, BlockType, InlineType
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "HwpWriter",
     "HwpxGenerator",

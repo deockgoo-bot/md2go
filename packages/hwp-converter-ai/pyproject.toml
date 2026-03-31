@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hwp-converter-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python으로 HWP/HWPX 파일 생성·파싱·변환. 한컴오피스 문서를 Markdown으로, Markdown을 HWP/HWPX로."
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,3 +36,7 @@ Issues = "https://github.com/hwp-converter-ai/hwp-converter-ai/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hwp_converter_ai"]
+artifacts = ["*.hwp", "*.hwpx"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/hwp_converter_ai"]
