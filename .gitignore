@@ -58,6 +58,14 @@ uploads/
 venv/
 env/
 
+# 내부 문서 (공개 불필요)
+checklist.md
+checklist-day3.md
+CLAUDE.md
+QA.md
+hwp-bridge-prd.md
+docs/
+
 # Secrets
 *.pem
 *.key
