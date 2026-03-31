@@ -1,0 +1,29 @@
+{
+  "name": "hwp-converter-ai",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HWP Converter AI Platform — 공공기관 HWPX 문서 자동화 플랫폼",
+  "scripts": {
+    "dev": "turbo run dev --filter=!./",
+    "build": "turbo run build --filter=!./",
+    "lint": "turbo run lint --filter=!./",
+    "type-check": "turbo run type-check --filter=!./",
+    "test": "turbo run test --filter=!./",
+    "clean": "turbo run clean --filter=!./ && rm -rf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "prettier": "^3.4.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "npm@10.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

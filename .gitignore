@@ -1,0 +1,68 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+dist/
+build/
+out/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage/
+
+# Turbo
+.turbo/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# Upload temp files (보안: 절대 커밋하지 말 것)
+/tmp/
+uploads/
+*.hwpx
+*.hwp
+!backend/app/services/hwpx_engine/hwp_template.hwp
+!backend/app/services/hwpx_engine/hwpx_template.hwpx
+!packages/hwp-converter-ai/src/hwp_converter_ai/hwp_template.hwp
+!packages/hwp-converter-ai/src/hwp_converter_ai/hwpx_template.hwpx
+
+# Python venv
+.venv/
+venv/
+env/
+
+# Secrets
+*.pem
+*.key
+*.crt
+
+# 비공개 문서 (역공학 노하우 + 한컴 공식 스펙)
+docs/hwp-format-implementation.md
+docs/hwp-5.0-spec-revision1.3.pdf

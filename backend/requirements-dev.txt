@@ -1,0 +1,18 @@
+-r requirements.txt
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1        # async test client
+factory-boy==3.3.1
+faker==33.1.0
+
+# Linting / Type checking
+ruff==0.8.6
+mypy==1.14.0
+types-redis==4.6.0.20241004
+
+# Dev tools
+ipython==8.31.0
+watchfiles==1.0.3
