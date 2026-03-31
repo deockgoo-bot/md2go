@@ -192,12 +192,15 @@ HwpWriter().from_markdown("# 업무 보고\\n\\n내용입니다.", "report.hwp")
 
       {/* Footer */}
       <footer className="border-t border-gray-200 py-8">
-        <div className="max-w-5xl mx-auto px-6 flex items-center justify-between text-sm text-gray-400">
-          <span>HWP Converter AI</span>
-          <div className="flex items-center gap-6">
-            <a href="https://github.com/deockgoo-bot/md2go" className="hover:text-gray-600">GitHub</a>
-            <a href="https://www.hancom.com/etc/hwpDownload.do" className="hover:text-gray-600">한컴 공식 스펙 기반</a>
+        <div className="max-w-5xl mx-auto px-6 space-y-3">
+          <div className="flex items-center justify-between text-sm text-gray-400">
+            <span>HWP Converter AI</span>
+            <div className="flex items-center gap-6">
+              <a href="https://github.com/deockgoo-bot/md2go" className="hover:text-gray-600">GitHub</a>
+              <a href="https://www.hancom.com/etc/hwpDownload.do" className="hover:text-gray-600">한컴 공식 스펙 기반</a>
+            </div>
           </div>
+          <p className="text-xs text-gray-300 text-center">HWP는 한글과컴퓨터의 등록 상표입니다. 본 서비스는 한컴과 무관한 독립 프로젝트입니다.</p>
         </div>
       </footer>
     </div>
