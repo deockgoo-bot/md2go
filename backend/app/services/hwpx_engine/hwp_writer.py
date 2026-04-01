@@ -16,6 +16,15 @@ from pathlib import Path
 from .ir_schema import DocumentIR, BlockNode, BlockType, InlineNode, InlineType
 
 
+def _sanitize_ucs2(text: str) -> str:
+    """BMP 범위(U+FFFF 이하)만 유지. 이모지 등 4바이트 문자 제거.
+
+    HWP PARA_TEXT는 UCS-2(2바이트 고정)이므로 서로게이트 페어가
+    필요한 문자는 바이트 오프셋을 깨뜨려 파일 손상을 유발한다.
+    """
+    return ''.join(c for c in text if ord(c) <= 0xFFFF)
+
+
 # ══════════════════════════════════════════════════════════════
 #  OLE Compound File Binary — HWP 전용 고정 구조 빌더
 # ══════════════════════════════════════════════════════════════
@@ -103,19 +112,19 @@ def _prv_text(blocks: list) -> bytes:
             if hasattr(c, 'text') and c.text
         )
         if text:
-            texts.append(text)
+            texts.append(_sanitize_ucs2(text))
     return '\r\n'.join(texts).encode('utf-16-le')
 
 
 def _build_ole(file_header: bytes, doc_info: bytes, section0: bytes,
                prv_text: bytes = b'') -> bytes:
     """
-    HWP 전용 OLE CFB 파일 생성 (mini FAT 지원).
+    HWP 전용 OLE CFB 파일 생성 (mini FAT 지원, 대용량 문서 대응).
 
     실제 HWP 파일 구조 참고:
     - \x05HwpSummaryInformation (한컴 전용 FMTID)
     - PrvText (미리보기 텍스트)
-    섹터: 0=FAT, 1=miniFAT, 2-3=Dir, 4+=mini stream container
+    mini FAT 섹터 수를 동적으로 할당하여 대용량 Section0도 처리.
     """
     _MINI_SZ = 64
     summary_info = _hwp_summary_info()
@@ -142,32 +151,44 @@ def _build_ole(file_header: bytes, doc_info: bytes, section0: bytes,
     for name, padded_data, _ in padded:
         ms_start[name] = cur
         cur += len(padded_data) // _MINI_SZ
+    total_mini_sectors = cur
 
     mini_raw = b''.join(p for _, p, _ in padded)
     mini_cont = _pad(mini_raw, _SECT_SZ)
     n_ms_sect = len(mini_cont) // _SECT_SZ
 
-    # mini FAT chain
-    mfat = [_FREESECT] * 128
+    # mini FAT: 동적 크기 (128 엔트리 = 1 섹터, 필요 시 확장)
+    n_mfat_sectors = max(1, (total_mini_sectors + 127) // 128)
+    mfat_capacity = n_mfat_sectors * 128
+    mfat = [_FREESECT] * mfat_capacity
     for name, padded_data, _ in padded:
         ms = ms_start[name]
         n = len(padded_data) // _MINI_SZ
         for i in range(n - 1):
             mfat[ms + i] = ms + i + 1
         mfat[ms + n - 1] = _ENDOFCHAIN
-    mfat_bytes = struct.pack('<128I', *mfat)
+    mfat_bytes = b''
+    for si in range(n_mfat_sectors):
+        chunk = mfat[si * 128:(si + 1) * 128]
+        mfat_bytes += struct.pack(f'<{len(chunk)}I', *chunk)
 
+    # 섹터 레이아웃: 0=FAT, 1..N=miniFAT, N+1..N+2=Dir, N+3+=mini stream
     FAT_SECT = 0
-    MINIFAT  = 1
-    DIR1     = 2
-    DIR2     = 3
-    MS_START_SECT = 4
+    MFAT_START = 1
+    DIR1 = MFAT_START + n_mfat_sectors
+    DIR2 = DIR1 + 1
+    MS_START_SECT = DIR2 + 1
 
-    fat = [_FREESECT] * 128
+    total_sectors = MS_START_SECT + n_ms_sect
+    fat = [_FREESECT] * max(128, total_sectors + 1)
     fat[FAT_SECT] = _FATSECT
-    fat[MINIFAT]  = _ENDOFCHAIN
-    fat[DIR1]     = DIR2
-    fat[DIR2]     = _ENDOFCHAIN
+    # mini FAT 체인
+    for i in range(n_mfat_sectors):
+        fat[MFAT_START + i] = (MFAT_START + i + 1) if i < n_mfat_sectors - 1 else _ENDOFCHAIN
+    # 디렉터리 체인
+    fat[DIR1] = DIR2
+    fat[DIR2] = _ENDOFCHAIN
+    # mini stream container 체인
     for i in range(n_ms_sect - 1):
         fat[MS_START_SECT + i] = MS_START_SECT + i + 1
     fat[MS_START_SECT + n_ms_sect - 1] = _ENDOFCHAIN
@@ -210,15 +231,15 @@ def _build_ole(file_header: bytes, doc_info: bytes, section0: bytes,
         + struct.pack('<HH', 0xFFFE, 9)
         + struct.pack('<H', 6)
         + b'\x00' * 6
-        + struct.pack('<I', 0)
-        + struct.pack('<I', 1)
-        + struct.pack('<I', DIR1)
-        + struct.pack('<I', 0)
-        + struct.pack('<I', 0x1000)
-        + struct.pack('<I', MINIFAT)
-        + struct.pack('<I', 1)
-        + struct.pack('<I', _ENDOFCHAIN)
-        + struct.pack('<I', 0)
+        + struct.pack('<I', 0)                    # total dir sectors (0 for v3)
+        + struct.pack('<I', 1)                    # total FAT sectors
+        + struct.pack('<I', DIR1)                 # first dir sector
+        + struct.pack('<I', 0)                    # transaction sig
+        + struct.pack('<I', 0x1000)               # mini stream cutoff (4096)
+        + struct.pack('<I', MFAT_START)           # first mini FAT sector
+        + struct.pack('<I', n_mfat_sectors)       # number of mini FAT sectors
+        + struct.pack('<I', _ENDOFCHAIN)          # first DIFAT sector
+        + struct.pack('<I', 0)                    # number of DIFAT sectors
         + difat
     ).ljust(_SECT_SZ, b'\x00')[:_SECT_SZ]
 
@@ -401,13 +422,17 @@ _SECTION_PREFIX = _b64.b64decode('QgBgASIAAAAEAAAAAAAAAwUAAAABAAAAAABDBEAEAgBkY2
 def _build_para_char_shape(block: BlockNode,
                            cs_normal: int = 0,
                            cs_bold: int = 2,
-                           cs_italic: int = 3) -> bytes:
+                           cs_italic: int = 3,
+                           prefix_len: int = 0) -> bytes:
     """인라인 노드 타입별 PARA_CHAR_SHAPE 데이터 생성.
 
     각 엔트리: (char_position: UINT32, charshape_id: UINT32)
+    prefix_len: 텍스트 앞에 추가된 접두사 길이 (예: LIST_ITEM의 '• ')
     """
     entries: list[tuple[int, int]] = []
-    char_pos = 0
+    if prefix_len > 0:
+        entries.append((0, cs_normal))
+    char_pos = prefix_len
     for child in block.children:
         if not isinstance(child, InlineNode) or not child.text:
             continue
@@ -446,11 +471,31 @@ def _section(blocks: list[BlockNode],
     out.write(_SECTION_PREFIX)
 
     # 블록 필터링 (TABLE은 텍스트 없어도 포함)
-    text_blocks = []
+    text_blocks: list[tuple[BlockNode, str]] = []
     for block in blocks:
         if block.type == BlockType.TABLE:
             text_blocks.append((block, ''))
             continue
+
+        # LIST → 자식 LIST_ITEM을 개별 문단으로 전개
+        if block.type == BlockType.LIST:
+            for child in block.children:
+                if isinstance(child, BlockNode):
+                    item_text = ''.join(
+                        c.text for c in child.children
+                        if hasattr(c, 'text') and c.text
+                    )
+                    if item_text:
+                        text_blocks.append((child, '\u2022 ' + item_text))
+            continue
+
+        # IMAGE → 대체 텍스트로 표시
+        if block.type == BlockType.IMAGE:
+            alt = block.metadata.get('alt', '')
+            if alt:
+                text_blocks.append((block, f'[이미지: {alt}]'))
+            continue
+
         text = ''.join(
             c.text for c in block.children
             if hasattr(c, 'text') and c.text
@@ -491,6 +536,7 @@ def _section(blocks: list[BlockNode],
         is_last    = (i == len(text_blocks) - 1)
 
         # PARA_TEXT: UTF-16LE + 0x0D (문단 끝 마커)
+        text = _sanitize_ucs2(text)
         text_utf16 = text.encode('utf-16-le') + b'\x0D\x00'
         char_count = len(text) + 1
 
@@ -506,8 +552,12 @@ def _section(blocks: list[BlockNode],
         out.write(_rec(_TAG_PARA_TEXT, text_utf16, level=1))
 
         # PARA_CHAR_SHAPE: 인라인 타입별 charshape 엔트리 생성
+        is_list_item = block.type == BlockType.LIST_ITEM
         if is_heading:
             pcs = struct.pack('<II', 0, cs_heading)
+        elif is_list_item:
+            pcs = _build_para_char_shape(block, cs_normal, cs_bold, cs_italic,
+                                         prefix_len=2)  # '• ' = 2글자
         else:
             pcs = _build_para_char_shape(block, cs_normal, cs_bold, cs_italic)
         out.write(_rec(_TAG_PARA_CHAR_SHAPE, pcs, level=1))
@@ -609,7 +659,9 @@ def _table_paragraph(rows: list[list[str]], base_level: int = 0) -> bytes:
     # 5) 각 셀
     for r in range(n_rows):
         for c in range(n_cols):
-            cell_text = (rows[r][c] if c < len(rows[r]) else '').replace('\t', '    ')
+            cell_text = _sanitize_ucs2(
+                (rows[r][c] if c < len(rows[r]) else '').replace('\t', '    ')
+            )
 
             # LIST_HEADER (38B) — 셀 정의
             lh = struct.pack('<H', 1)       # paragraphs
@@ -804,43 +856,37 @@ class HwpBinaryWriter:
             ole.close()
         else:
             ole.close()
-            # 큰 문서: regular sector에 직접 배치
-            # OLE mini stream cutoff = 4096 → 압축 데이터가 4096 이상이어야 함
-            # 제로 패딩은 뷰어가 잘못된 데이터로 인식 → 빈 문단 추가로 실제 데이터 확장
-            while len(s0_comp) < 4096:
-                s0_raw += _empty_para()
-                co = zlib.compressobj(6, zlib.DEFLATED, -15)
-                s0_comp = co.compress(s0_raw) + co.flush()
-            self._write_large_section(output_path, s0_comp, actual_size=len(s0_comp))
+            if len(s0_comp) < 4096:
+                # 4096 미만: mini stream 패치 (OLE mini stream cutoff 이내)
+                self._write_section_raw(output_path, s0_comp)
+            else:
+                # 4096 이상: regular sector로 이동 필수.
+                # OLE 스펙상 size ≥ 4096이면 리더가 start를 regular sector로
+                # 해석하므로, mini stream에 두면 데이터를 찾지 못함.
+                self._write_section_to_regular(output_path, s0_comp)
 
         return output_path
 
     @staticmethod
-    def _write_large_section(output_path: Path, s0_data: bytes,
-                             actual_size: int | None = None) -> None:
-        """큰 Section0을 regular sector에 직접 배치.
+    def _write_section_to_regular(output_path: Path, s0_data: bytes) -> None:
+        """Section0을 regular sector에 직접 배치 (size ≥ 4096용).
 
-        mini stream 대신 파일 끝에 regular sector로 추가하고
-        디렉터리/FAT를 업데이트한다.
+        템플릿의 mini stream에 있던 Section0을 regular sector로 이동.
+        파일 끝에 새 sector를 추가하고 디렉터리/FAT를 갱신한다.
         """
-        SECT = 512
         data = bytearray(output_path.read_bytes())
+        SECT = 512
 
-        # OLE 헤더 파싱
+        fat_start = struct.unpack_from('<I', data, 76)[0]
+        fat = list(struct.unpack_from('<128I', data, SECT + fat_start * SECT))
+
+        # 디렉터리 읽기
         first_dir = struct.unpack_from('<I', data, 48)[0]
-        fat_sector = struct.unpack_from('<I', data, 76)[0]
-        fat_offset = SECT + fat_sector * SECT
-
-        # FAT 읽기
-        fat = list(struct.unpack_from('<128I', data, fat_offset))
-
-        # 디렉터리 찾기
         dir_sectors = []
         s = first_dir
-        while s < 0xFFFFFFFE and len(dir_sectors) < 20:
+        while s != 0xFFFFFFFE and s != 0xFFFFFFFF and len(dir_sectors) < 20:
             dir_sectors.append(s)
             s = fat[s] if s < len(fat) else 0xFFFFFFFE
-
         dir_data = bytearray()
         for ds in dir_sectors:
             dir_data.extend(data[SECT + ds * SECT:SECT + ds * SECT + SECT])
@@ -855,34 +901,28 @@ class HwpBinaryWriter:
                 if name == 'Section0':
                     s0_idx = i
                     break
-
         if s0_idx is None:
-            raise RuntimeError("Section0 not found")
+            raise RuntimeError("Section0 디렉터리 엔트리를 찾을 수 없습니다")
 
         # Section0 데이터를 512바이트 경계로 패딩
         s0_padded = s0_data + b'\x00' * (SECT - len(s0_data) % SECT) \
             if len(s0_data) % SECT else s0_data
-        n_new_sectors = len(s0_padded) // SECT
+        n_new = len(s0_padded) // SECT
 
-        # 파일 끝에 새 섹터 추가
-        first_new = len(data) // SECT - 1  # 0-based sector index (subtract header)
-        # 실제로는 (file_size - header_512) / 512
+        # 파일 끝에 새 sector 추가 + FAT 체인 설정
         first_new = (len(data) - SECT) // SECT
-
-        for i in range(n_new_sectors):
+        for i in range(n_new):
             data.extend(s0_padded[i * SECT:(i + 1) * SECT])
-
-        # FAT 확장 + 체인 설정
-        while len(fat) <= first_new + n_new_sectors:
+        while len(fat) <= first_new + n_new:
             fat.append(0xFFFFFFFF)
-        for i in range(n_new_sectors - 1):
+        for i in range(n_new - 1):
             fat[first_new + i] = first_new + i + 1
-        fat[first_new + n_new_sectors - 1] = 0xFFFFFFFE  # ENDOFCHAIN
+        fat[first_new + n_new - 1] = 0xFFFFFFFE
 
-        # Section0 디렉터리 엔트리 업데이트: regular sector 참조
+        # 디렉터리 엔트리 업데이트: regular sector 참조
         entry_off = s0_idx * 128
-        struct.pack_into('<I', dir_data, entry_off + 116, first_new)  # start sector
-        struct.pack_into('<I', dir_data, entry_off + 120, actual_size or len(s0_data))
+        struct.pack_into('<I', dir_data, entry_off + 116, first_new)
+        struct.pack_into('<I', dir_data, entry_off + 120, len(s0_data))
 
         # 디렉터리 다시 쓰기
         for i, ds in enumerate(dir_sectors):
@@ -891,15 +931,17 @@ class HwpBinaryWriter:
 
         # FAT 다시 쓰기
         fat_bytes = struct.pack(f'<{min(len(fat), 128)}I', *fat[:128])
-        data[fat_offset:fat_offset + len(fat_bytes)] = fat_bytes
+        data[SECT + fat_start * SECT:SECT + fat_start * SECT + len(fat_bytes)] = fat_bytes
 
         output_path.write_bytes(bytes(data))
 
     @staticmethod
     def _write_section_raw(output_path: Path, s0_data: bytes) -> None:
-        """OLE 파일의 mini stream에서 Section0을 직접 교체 (크기 제한 없음).
+        """템플릿 OLE의 mini stream에서 Section0을 직접 교체.
 
-        mini FAT 체인과 디렉터리 엔트리의 size 필드를 갱신한다.
+        mini FAT 체인과 디렉터리 엔트리의 size 필드를 갱신하고,
+        필요 시 mini stream을 확장하여 큰 Section0도 수용한다.
+        템플릿 OLE 구조를 그대로 유지하므로 한컴 뷰어 호환성 보장.
         """
         data = bytearray(output_path.read_bytes())
         SECT = 512
@@ -909,7 +951,7 @@ class HwpBinaryWriter:
         first_dir = struct.unpack_from('<I', data, 48)[0]
         first_minifat = struct.unpack_from('<I', data, 60)[0]
 
-        # 디렉터리 섹터 체인 따라가기
+        # FAT 읽기
         fat_start = struct.unpack_from('<I', data, 76)[0]
         fat_offset = SECT + fat_start * SECT
         fat = list(struct.unpack_from('<128I', data, fat_offset))
@@ -942,11 +984,9 @@ class HwpBinaryWriter:
 
         entry_offset_in_dir = s0_entry_idx * 128
         old_start = struct.unpack_from('<I', dir_data, entry_offset_in_dir + 116)[0]
-        old_size = struct.unpack_from('<I', dir_data, entry_offset_in_dir + 120)[0]
 
         # Root Entry에서 mini stream 위치
         root_start = struct.unpack_from('<I', dir_data, 116)[0]
-        root_size = struct.unpack_from('<I', dir_data, 120)[0]
 
         # mini stream 데이터 추출
         ms_sectors = []
@@ -981,7 +1021,8 @@ class HwpBinaryWriter:
             ms = mfat[ms] if ms < len(mfat) else 0xFFFFFFFE
 
         # 새 데이터를 mini sector 크기로 패딩
-        padded = s0_data + b'\x00' * (MINI - len(s0_data) % MINI) if len(s0_data) % MINI else s0_data
+        padded = s0_data + b'\x00' * (MINI - len(s0_data) % MINI) \
+            if len(s0_data) % MINI else s0_data
         new_mini_count = len(padded) // MINI
 
         # 기존 mini sector에 데이터 쓰기
@@ -993,22 +1034,20 @@ class HwpBinaryWriter:
         # 필요하면 추가 mini sector 할당 (mini stream 끝에 추가)
         if new_mini_count > len(old_mini_sectors):
             current_total = len(mini_stream) // MINI
-            for i in range(len(old_mini_sectors), new_mini_count):
-                ms_idx = current_total + (i - len(old_mini_sectors))
-                # mini stream 확장
+            orig_count = len(old_mini_sectors)
+            for i in range(orig_count, new_mini_count):
+                ms_idx = current_total + (i - orig_count)
                 while len(mini_stream) <= ms_idx * MINI + MINI:
                     mini_stream.extend(b'\x00' * MINI)
                 offset = ms_idx * MINI
                 mini_stream[offset:offset + MINI] = padded[i * MINI:(i + 1) * MINI]
 
                 # mini FAT 체인 업데이트
-                if i > 0:
-                    prev_ms = old_mini_sectors[i - 1] if i < len(old_mini_sectors) + 1 else ms_idx - 1
-                    if i == len(old_mini_sectors):
-                        prev_ms = old_mini_sectors[-1]
-                    while len(mfat) <= ms_idx:
-                        mfat.append(0xFFFFFFFF)
-                    mfat[prev_ms] = ms_idx
+                prev_ms = old_mini_sectors[-1] if i == orig_count \
+                    else ms_idx - 1
+                while len(mfat) <= ms_idx:
+                    mfat.append(0xFFFFFFFF)
+                mfat[prev_ms] = ms_idx
                 old_mini_sectors.append(ms_idx)
 
         # 마지막 mini sector를 ENDOFCHAIN으로
@@ -1017,7 +1056,6 @@ class HwpBinaryWriter:
             while len(mfat) <= last_ms:
                 mfat.append(0xFFFFFFFF)
             mfat[last_ms] = 0xFFFFFFFE
-            # 남은 기존 sector 해제
             for i in range(new_mini_count, len(old_mini_sectors)):
                 if old_mini_sectors[i] < len(mfat):
                     mfat[old_mini_sectors[i]] = 0xFFFFFFFF
@@ -1033,7 +1071,6 @@ class HwpBinaryWriter:
         needed_sectors = (len(mini_stream) + SECT - 1) // SECT
         ms_padded = mini_stream + b'\x00' * (needed_sectors * SECT - len(mini_stream))
 
-        # 기존 mini stream sectors에 쓰기
         for i, sec in enumerate(ms_sectors):
             if i < needed_sectors:
                 offset = SECT + sec * SECT
@@ -1043,7 +1080,7 @@ class HwpBinaryWriter:
         if needed_sectors > len(ms_sectors):
             last_ms_sec = ms_sectors[-1]
             for i in range(len(ms_sectors), needed_sectors):
-                new_sec = len(data) // SECT
+                new_sec = (len(data) - SECT) // SECT
                 data.extend(ms_padded[i * SECT:(i + 1) * SECT])
                 fat[last_ms_sec] = new_sec
                 while len(fat) <= new_sec:
@@ -1056,12 +1093,16 @@ class HwpBinaryWriter:
             offset = SECT + ds * SECT
             data[offset:offset + SECT] = dir_data[i * SECT:(i + 1) * SECT]
 
-        # mini FAT 다시 쓰기
+        # mini FAT 다시 쓰기: 엔트리를 128개 단위(=1섹터)로 정렬
+        total_mfat_entries = max(len(mfat), 128 * len(mfat_sectors))
+        while len(mfat) < total_mfat_entries:
+            mfat.append(0xFFFFFFFF)
         mfat_bytes = struct.pack(f'<{len(mfat)}I', *mfat)
-        mfat_padded = mfat_bytes + b'\xFF' * 4 * (128 * len(mfat_sectors) - len(mfat))
         for i, ms in enumerate(mfat_sectors):
             offset = SECT + ms * SECT
-            data[offset:offset + SECT] = mfat_padded[i * SECT:(i + 1) * SECT]
+            chunk = mfat_bytes[i * SECT:(i + 1) * SECT]
+            if len(chunk) == SECT:
+                data[offset:offset + SECT] = chunk
 
         # FAT 다시 쓰기
         fat_bytes = struct.pack(f'<{min(len(fat), 128)}I', *fat[:128])

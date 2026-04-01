@@ -153,8 +153,7 @@ export default function ConvertPage() {
                 )}
                 {mode === "md-to-hwp" && result.job_id && (
                   <a
-                    href={getDownloadUrl(result.job_id, "convert", outputFmt)}
-                    download
+                    href={`/api/download?jobId=${result.job_id}&fmt=${outputFmt}&type=convert`}
                     className="inline-flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-700 font-medium"
                   >
                     <Download className="h-4 w-4" /> .{outputFmt} 저장
